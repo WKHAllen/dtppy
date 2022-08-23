@@ -1,4 +1,4 @@
-from .server import Server, server
 from .client import Client, client
+from .server import Server, server
 
-__version__ = "1.2.1"
+__version__ = "0.1.0"

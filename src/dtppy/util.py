@@ -1,89 +1,53 @@
 import pickle
-import json
-import compressdir
-from cryptography.fernet import Fernet
-import rsa
-import os
-import binascii
+import socket
 
-LENSIZE = 5
-LENTYPE = 1
+from .crypto import fernet_encrypt, fernet_decrypt
 
-TYPEOBJ = 0
-TYPEFILE = 1
+LEN_SIZE = 5
 
-MAXSIZE = 256 ** LENSIZE - 1
+DEFAULT_HOST = socket.gethostbyname(socket.gethostname())
+DEFAULT_PORT = 29275
 
-LOCALSERVERHOST = "127.0.0.1"
-LOCALSERVERPORT = 0
+LOCAL_SERVER_HOST = "127.0.0.1"
+LOCAL_SERVER_PORT = 0
 
-def _decToAscii(dec):
-    hexstr = hex(dec)[2:]
-    if len(hexstr) % 2 == 1:
-        hexstr = "0" + hexstr
-    ascii = binascii.unhexlify(hexstr.encode())
-    return ascii
 
-def _asciiToDec(ascii):
-    hexstr = binascii.hexlify(ascii)
-    dec = int(hexstr, base=16)
-    return dec
+def encode_message_size(size):
+    """Encode the size portion of a message."""
 
-def _buildMessage(data, messageType=TYPEOBJ, key=None, jsonEncode=False):
-    if messageType == TYPEOBJ:
-        if not jsonEncode:
-            data = pickle.dumps(data)
-        else:
-            data = json.dumps(data).encode()
-    elif messageType == TYPEFILE:
-        data = compressdir.compressed(data)
-    if key is not None:
-        data = _encrypt(key, data)
-    if len(data) > MAXSIZE:
-        raise RuntimeError("maximum data packet size exceeded")
-    size = _decToAscii(len(data))
-    size = b"\x00" * (LENSIZE - len(size)) + size
-    type = str(messageType).encode("utf-8")
-    return size + type + data
+    encoded_size = b""
 
-def _unpackMessage(data, messageType=TYPEOBJ, key=None, recvDir=None, jsonEncode=False):
-    if recvDir is None:
-        recvDir = os.getcwd()
-    if key is not None:
-        data = _decrypt(key, data)
-    if messageType == TYPEOBJ:
-        if not jsonEncode:
-            data = pickle.loads(data)
-        else:
-            data = json.loads(data)
-        return data
-    elif messageType == TYPEFILE:
-        os.makedirs(recvDir, exist_ok=True)
-        path = compressdir.decompressed(data, newpath=recvDir)
-        return path
+    for i in range(LEN_SIZE):
+        encoded_size = bytes([size & 0xff]) + encoded_size
+        size >>= 8
 
-def _newKeys(size=512):
-    pubkey, privkey = rsa.newkeys(size)
-    return pubkey, privkey
+    return encoded_size
 
-def _asymmetricEncrypt(pubkey, plaintext):
-    ciphertext = rsa.encrypt(plaintext, pubkey)
-    return ciphertext
 
-def _asymmetricDecrypt(privkey, ciphertext):
-    plaintext = rsa.decrypt(ciphertext, privkey)
-    return plaintext
+def decode_message_size(encoded_size):
+    """Decode the size portion of a message."""
 
-def _newKey():
-    key = Fernet.generate_key()
-    return key
+    size = 0
 
-def _encrypt(key, data):
-    f = Fernet(key)
-    token = f.encrypt(data)
-    return token
+    for i in range(LEN_SIZE):
+        size <<= 8
+        size += encoded_size[i]
 
-def _decrypt(key, token):
-    f = Fernet(key)
-    data = f.decrypt(token)
-    return data
+    return size
+
+
+def construct_message(data, key):
+    """Construct a message to be sent through a socket."""
+
+    message_serialized = pickle.dumps(data)
+    message_encrypted = fernet_encrypt(key, message_serialized)
+    message_size = encode_message_size(message_encrypted)
+    return message_size + message_encrypted
+
+
+def deconstruct_message(data, key):
+    """Deconstruct a message that came from a socket."""
+
+    message_decrypted = fernet_decrypt(key, data)
+    message_deserialized = pickle.loads(message_decrypted)
+    return message_deserialized

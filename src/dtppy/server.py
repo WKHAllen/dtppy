@@ -1,253 +1,274 @@
-import socket
-import select
-import threading
-import pickle
 import errno
-import os
+import pickle
+import socket
+import threading
 import time
-import copy
 from contextlib import contextmanager
-from .util import LENSIZE, LENTYPE, TYPEOBJ, TYPEFILE, _decToAscii, _asciiToDec, _buildMessage, _unpackMessage, _newKey, _asymmetricEncrypt
+
+import select
+
+from .crypto import new_rsa_keys, rsa_decrypt
+from .util import LEN_SIZE, DEFAULT_HOST, DEFAULT_PORT, encode_message_size, decode_message_size, construct_message, \
+    deconstruct_message
+
 
 class Server:
-    '''Server socket object.'''
-    def __init__(self, onRecv=None, onConnect=None, onDisconnect=None, blocking=False, eventBlocking=False, recvDir=None, daemon=True, jsonEncode=False, ignoreErrors=False):
-        ''''onRecv' will be called when a packet is received.
-            onRecv takes the following parameters: client socket, data, datatype (0: object, 1: file).
-        'onConnect' will be called when a client connects.
-            onConnect takes the following parameters: client socket.
-        'onDisconnect' will be called when a client disconnects.
-            onDisconnect takes the following parameters: client socket.
-        If 'blocking' is True, the start method will block until stopping.
-        If 'eventBlocking' is True, onRecv, onConnect, and onDisconnect will block when called.
-        'recvDir' is the directory in which files will be put in when received.
-        If 'daemon' is True, all threads spawned will be daemon threads.
-        If 'jsonEncode' is True, packets will be encoded using json instad of pickle.
-        If 'ignoreErrors' is True, all errors will be ignored.'''
-        self._onRecv = onRecv
-        self._onConnect = onConnect
-        self._onDisconnect = onDisconnect
-        self._blocking = blocking
-        self._eventBlocking = eventBlocking
-        if recvDir is not None:
-            self.recvDir = recvDir
-        else:
-            self.recvDir = os.getcwd()
-        self._daemon = daemon
-        self._jsonEncode = jsonEncode
-        self._ignoreErrors = ignoreErrors
+    """A socket server."""
+
+    def __init__(self, on_receive=None, on_connect=None, on_disconnect=None):
+        """`on_receive` is a function that will be called when a message is received from a client.
+            It takes two parameters: client ID and data received.
+        `on_connect` is a function that will be called when a client connects.
+            It takes one parameter: client ID.
+        `on_disconnect` is a function that will be called when a client disconnects.
+            It takes one parameter: client ID."""
+
+        self._on_receive = on_receive
+        self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
         self._serving = False
-        self._host = None
-        self._port = None
+        self._clients = {}
         self._keys = {}
+        self._next_client_id = 0
         self._serveThread = None
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.socks = [self.sock]
-    
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
     def start(self, host=None, port=None):
-        '''Start the server.'''
+        """Start the server."""
+
         if self._serving:
-            raise RuntimeError("already serving")
+            raise RuntimeError("server is already serving")
+
         if host is None:
-            host = socket.gethostname() # socket.gethostbyname(socket.gethostname())
+            host = DEFAULT_HOST
         if port is None:
-            port = 0
-        self.sock.bind((host, port))
-        self.sock.listen()
+            port = DEFAULT_PORT
+
+        self._sock.bind((host, port))
+        self._sock.listen()
         self._serving = True
-        self._host = host
-        self._port = port
-        if not self._blocking:
-            self._serveThread = threading.Thread(target=self._serve)
-            if self._daemon:
-                self._serveThread.daemon = True
-            self._serveThread.start()
-        else:
-            self._serve()
-    
+
+        self._serveThread = threading.Thread(target=self._serve)
+        self._serveThread.daemon = True
+        self._serveThread.start()
+
     def stop(self):
-        '''Stop the server.'''
+        """Stop the server."""
+
+        if not self._serving:
+            raise RuntimeError("server is not serving")
+
         self._serving = False
-        localClientSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        local_client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
         try:
-            localClientSock.connect(self.sock.getsockname())
+            local_client_sock.connect(self._sock.getsockname())
         except ConnectionResetError:
-            pass # Connection reset by peer
+            pass  # Connection reset by peer
+
         time.sleep(0.01)
-        localClientSock.close()
-        for sock in self.socks:
-            if sock != self.sock:
-                sock.close()
-        self.sock.close()
-        self.socks = [self.sock]
-        self._host = None
-        self._port = None
+        local_client_sock.close()
+
+        for client_id in self._clients:
+            self._clients[client_id].close()
+
+        self._sock.close()
+        self._clients = {}
         self._keys = {}
+
         if self._serveThread is not None:
             if self._serveThread is not threading.current_thread():
                 self._serveThread.join()
             self._serveThread = None
 
+    def send(self, data, *client_ids):
+        """Send data to clients. If no client IDs are specified, data will be sent to all clients."""
+
+        if not self._serving:
+            raise RuntimeError("server is not serving")
+
+        if not client_ids:
+            client_ids = self._clients.keys()
+
+        for client_id in client_ids:
+            if client_id in self._clients.keys():
+                key = self._keys[client_id]
+                conn = self._clients[client_id]
+                message = construct_message(data, key)
+                conn.send(message)
+            else:
+                raise RuntimeError(f"client {client_id} does not exist")
+
     def serving(self):
-        '''Whether or not the server is serving.'''
+        """Check whether the server is serving."""
+
         return self._serving
 
-    def getAddr(self):
-        '''Get the address of the server.'''
-        return self.sock.getsockname()
+    def get_addr(self):
+        """Get the address of the server."""
 
-    def getClientAddr(self, conn):
-        '''Get the address of a client.'''
-        return conn.getpeername()
+        if not self._serving:
+            raise RuntimeError("server is not serving")
 
-    def getClients(self):
-        '''Get the list of clients.'''
-        clients = copy.copy(self.socks)
-        clients.remove(self.sock)
-        return clients
+        return self._sock.getsockname()
 
-    def removeClient(self, conn):
-        '''Remove a client.'''
+    def get_client_addr(self, client_id):
+        """Get the address of a client."""
+
+        if not self._serving:
+            raise RuntimeError("server is not serving")
+
+        return self._clients[client_id].getpeername()
+
+    def remove_client(self, client_id):
+        """Remove a client."""
+
+        if not self._serving:
+            raise RuntimeError("server is not serving")
+
+        if client_id not in self._clients.keys():
+            raise RuntimeError(f"client {client_id} does not exist")
+
+        conn = self._clients[client_id]
         conn.close()
-        self.socks.remove(conn)
+        self._clients.pop(conn)
         self._keys.pop(conn)
 
-    def send(self, data, conn=None):
-        '''Send data to a client. If conn is None, data is sent to all clients.'''
-        if not self._serving:
-            raise RuntimeError("not currently serving")
-        if conn is not None:
-            message = _buildMessage(data, messageType=TYPEOBJ, key=self._keys[conn], jsonEncode=self._jsonEncode)
-            conn.send(message)
-        else:
-            for conn in self.socks:
-                if conn != self.sock:
-                    message = _buildMessage(data, messageType=TYPEOBJ, key=self._keys[conn], jsonEncode=self._jsonEncode)
-                    conn.send(message)
-
-    def sendFile(self, path, conn=None):
-        '''Send a file or directory to a client. If conn is None, data is sent to all clients.'''
-        if not self._serving:
-            raise RuntimeError("not currently serving")
-        if conn is not None:
-            message = _buildMessage(path, messageType=TYPEFILE, key=self._keys[conn], jsonEncode=self._jsonEncode)
-            conn.send(message)
-        else:
-            for conn in self.socks:
-                if conn != self.sock:
-                    message = _buildMessage(path, messageType=TYPEFILE, key=self._keys[conn], jsonEncode=self._jsonEncode)
-                    conn.send(message)
-
-    def _doKeyExchange(self, conn):
-        size = conn.recv(LENSIZE)
-        messageSize = _asciiToDec(size)
-        message = conn.recv(messageSize)
-        pubkey = pickle.loads(message)
-        key = _newKey()
-        encryptedKey = _asymmetricEncrypt(pubkey, key)
-        size = _decToAscii(len(encryptedKey))
-        size = b"\x00" * (LENSIZE - len(size)) + size
-        conn.send(size + encryptedKey)
-        self._keys[conn] = key
-
     def _serve(self):
+        """Serve clients."""
+
         while self._serving:
             try:
-                readSocks, _, exceptionSocks = select.select(self.socks, [], self.socks)
-            except ValueError: # happens when a client is removed
+                socks = list(self._clients.values())
+                socks.insert(0, self._sock)
+                read_socks, _, exception_socks = select.select(socks, [], socks)
+            except ValueError:  # happens when a client is removed
                 continue
+
             if not self._serving:
                 return
-            for notifiedSock in readSocks:
-                if notifiedSock == self.sock:
+
+            for notified_sock in read_socks:
+                if notified_sock == self._sock:
                     try:
-                        conn, _ = self.sock.accept()
+                        conn, _ = self._sock.accept()
                     except OSError as e:
                         if e.errno == errno.ENOTSOCK and not self._serving:
                             return
                         else:
                             raise e
-                    if not self._ignoreErrors:
-                        self._doKeyExchange(conn)
-                        self.socks.append(conn)
-                        self._callOnConnect(conn)
-                    else:
-                        try:
-                            self._doKeyExchange(conn)
-                        except: # likely a different protocol
-                            pass # in which case, do nothing
-                        else:
-                            self.socks.append(conn)
-                            self._callOnConnect(conn)
+
+                    client_id = self._new_client_id()
+
+                    self._exchange_keys(client_id, conn)
+                    self._clients[client_id] = conn
+                    self._call_on_connect(client_id)
                 else:
+                    client_id = None
+
+                    for sock_client_id in self._clients:
+                        if self._clients[sock_client_id] == notified_sock:
+                            client_id = sock_client_id
+
                     try:
-                        size = notifiedSock.recv(LENSIZE)
+                        size = notified_sock.recv(LEN_SIZE)
+
                         if len(size) == 0:
                             try:
-                                self.removeClient(notifiedSock)
+                                self.remove_client(client_id)
                             except ValueError:
                                 pass
-                            self._callOnDisconnect(notifiedSock)
+
+                            self._call_on_disconnect(client_id)
                             continue
-                        messageSize = _asciiToDec(size)
-                        messageType = int(notifiedSock.recv(LENTYPE).decode("utf-8"))
-                        message = notifiedSock.recv(messageSize)
+
+                        message_size = decode_message_size(size)
+                        message_encoded = notified_sock.recv(message_size)
+                        key = self._keys[client_id]
+                        message = deconstruct_message(message_encoded, key)
+
+                        self._call_on_receive(client_id, message)
                     except OSError as e:
                         if e.errno == errno.ECONNRESET or e.errno == errno.ENOTSOCK:
                             if not self._serving:
                                 return
+
                             try:
-                                self.removeClient(notifiedSock)
+                                self.remove_client(client_id)
                             except ValueError:
                                 pass
-                            self._callOnDisconnect(notifiedSock)
+
+                            self._call_on_disconnect(client_id)
                             continue
                         else:
                             raise e
-                    else:
-                        data = _unpackMessage(message, messageType=messageType, key=self._keys[notifiedSock], recvDir=self.recvDir, jsonEncode=self._jsonEncode)
-                        self._callOnRecv(notifiedSock, data, messageType)
-            for notifiedSock in exceptionSocks:
+
+            for notified_sock in exception_socks:
+                client_id = None
+
+                for sock_client_id in self._clients:
+                    if self._clients[sock_client_id] == notified_sock:
+                        client_id = sock_client_id
+
                 try:
-                    self.removeClient(notifiedSock)
+                    self.remove_client(client_id)
                 except ValueError:
                     pass
-                self._callOnDisconnect(notifiedSock)
 
-    def _callOnRecv(self, conn, data, messageType):
-        if self._onRecv is not None:
-            if not self._eventBlocking:
-                t = threading.Thread(target=self._onRecv, args=(conn, data, messageType))
-                if self._daemon:
-                    t.daemon = True
-                t.start()
-            else:
-                self._onRecv(conn, data, messageType)
+                self._call_on_disconnect(client_id)
 
-    def _callOnConnect(self, conn):
-        if self._onConnect is not None:
-            if not self._eventBlocking:
-                t = threading.Thread(target=self._onConnect, args=(conn,))
-                if self._daemon:
-                    t.daemon = True
-                t.start()
-            else:
-                self._onConnect(conn)
-    
-    def _callOnDisconnect(self, conn):
-        if self._onDisconnect is not None:
-            if not self._eventBlocking:
-                t = threading.Thread(target=self._onDisconnect, args=(conn,))
-                if self._daemon:
-                    t.daemon = True
-                t.start()
-            else:
-                self._onDisconnect(conn)
+    def _exchange_keys(self, client_id, conn):
+        """Exchange crypto keys with a client."""
+
+        public_key, private_key = new_rsa_keys()
+        public_key_serialized = pickle.dumps(public_key)
+        size_encoded = encode_message_size(len(public_key_serialized))
+        conn.send(size_encoded + public_key_serialized)
+
+        size_encoded = conn.recv(LEN_SIZE)
+        size = decode_message_size(size_encoded)
+        key_encrypted = conn.recv(size)
+        key = rsa_decrypt(private_key, key_encrypted)
+        self._keys[client_id] = key
+
+    def _new_client_id(self):
+        """Generate a new client ID."""
+
+        client_id = self._next_client_id
+        self._next_client_id += 1
+        return client_id
+
+    def _call_on_receive(self, client_id, data):
+        """Call the receive callback."""
+
+        if self._on_receive is not None:
+            t = threading.Thread(target=self._on_receive, args=(client_id, data))
+            t.daemon = True
+            t.start()
+
+    def _call_on_connect(self, client_id):
+        """Call the connect callback."""
+
+        if self._on_connect is not None:
+            t = threading.Thread(target=self._on_connect, args=(client_id,))
+            t.daemon = True
+            t.start()
+
+    def _call_on_disconnect(self, client_id):
+        """Call the disconnect callback."""
+
+        if self._on_disconnect is not None:
+            t = threading.Thread(target=self._on_disconnect, args=(client_id,))
+            t.daemon = True
+            t.start()
+
 
 @contextmanager
 def server(host, port, *args, **kwargs):
-    '''Use Server object in a with statement.'''
+    """Use socket servers in a with statement."""
+
     s = Server(*args, **kwargs)
     s.start(host, port)
     yield s

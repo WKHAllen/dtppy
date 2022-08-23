@@ -1,8 +1,10 @@
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.split(os.path.split(os.path.abspath(__file__))[0])[0])
-from dtplib import Client, Server, client, server
+from dtppy import Client, Server, client, server
 import time
+
 
 def main():
     waitTime = 0.1
@@ -84,6 +86,7 @@ def main():
     assert connect == [client1, client2]
     assert disconnect == [client1]
     assert disconnected == [True]
+
 
 if __name__ == "__main__":
     main()
