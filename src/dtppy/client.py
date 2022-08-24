@@ -3,7 +3,9 @@ import pickle
 import socket
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
+from typing import Any, Union, Generator
 
 import select
 
@@ -15,21 +17,23 @@ from .util import LEN_SIZE, DEFAULT_HOST, DEFAULT_PORT, LOCAL_SERVER_HOST, LOCAL
 class Client:
     """A socket client."""
 
-    def __init__(self, on_receive=None, on_disconnected=None):
+    def __init__(self,
+                 on_receive: Callable[[Any]] = None,
+                 on_disconnected: Callable[[]] = None) -> None:
         """`on_receive` is a function that will be called when a message is received from the server.
             It takes one parameter: the data received.
         `on_disconnected` is a function that will be called when the client is unexpected disconnected from the server.
             It takes no parameters."""
 
-        self._on_receive = on_receive
-        self._on_disconnected = on_disconnected
-        self._connected = False
-        self._key = None
-        self._handleThread = None
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._local_server = None
+        self._on_receive: Callable[[Any]] = on_receive
+        self._on_disconnected: Callable[[]] = on_disconnected
+        self._connected: bool = False
+        self._key: Union[bytes, None] = None
+        self._handle_thread: Union[threading.Thread, None] = None
+        self._sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._local_server: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    def connect(self, host=None, port=None):
+    def connect(self, host: str = None, port: str = None) -> None:
         """Connect to a server."""
 
         if self._connected:
@@ -44,11 +48,11 @@ class Client:
         self._connected = True
         self._exchange_keys()
 
-        self._handleThread = threading.Thread(target=self._handle)
-        self._handleThread.daemon = True
-        self._handleThread.start()
+        self._handle_thread = threading.Thread(target=self._handle)
+        self._handle_thread.daemon = True
+        self._handle_thread.start()
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         """Disconnect from the server."""
 
         if not self._connected:
@@ -69,12 +73,12 @@ class Client:
         self._sock.close()
         self._key = None
 
-        if self._handleThread is not None:
-            if self._handleThread is not threading.current_thread():
-                self._handleThread.join()
-            self._handleThread = None
+        if self._handle_thread is not None:
+            if self._handle_thread is not threading.current_thread():
+                self._handle_thread.join()
+            self._handle_thread = None
 
-    def send(self, data):
+    def send(self, data: Any) -> None:
         """Send data to the server."""
 
         if not self._connected:
@@ -83,12 +87,12 @@ class Client:
         message = construct_message(data, self._key)
         self._sock.send(message)
 
-    def connected(self):
+    def connected(self) -> bool:
         """Check whether the client is connected to a server."""
 
         return self._connected
 
-    def get_addr(self):
+    def get_addr(self) -> tuple[str, int]:
         """Get the address of the client."""
 
         if not self._connected:
@@ -96,7 +100,7 @@ class Client:
 
         return self._sock.getsockname()
 
-    def get_server_addr(self):
+    def get_server_addr(self) -> tuple[str, int]:
         """Get the address of the server."""
 
         if not self._connected:
@@ -104,10 +108,9 @@ class Client:
 
         return self._sock.getpeername()
 
-    def _handle(self):
+    def _handle(self) -> None:
         """Handle events from the server."""
 
-        self._local_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._local_server.bind((LOCAL_SERVER_HOST, LOCAL_SERVER_PORT))
         self._local_server.listen()
 
@@ -149,7 +152,7 @@ class Client:
                 else:
                     raise e
 
-    def _exchange_keys(self):
+    def _exchange_keys(self) -> None:
         """Exchange crypto keys with the server."""
 
         size_encoded = self._sock.recv(LEN_SIZE)
@@ -163,7 +166,7 @@ class Client:
         self._sock.send(size_encoded + key_encrypted)
         self._key = key
 
-    def _call_on_receive(self, data):
+    def _call_on_receive(self, data: Any) -> None:
         """Call the receive callback."""
 
         if self._on_receive is not None:
@@ -171,7 +174,7 @@ class Client:
             t.daemon = True
             t.start()
 
-    def _call_on_disconnected(self):
+    def _call_on_disconnected(self) -> None:
         """Call the disconnected callback."""
 
         if self._on_disconnected is not None:
@@ -181,10 +184,14 @@ class Client:
 
 
 @contextmanager
-def client(host, port, *args, **kwargs):
-    """Use Client object in a with statement."""
+def client(host: str = None,
+           port: int = None,
+           on_receive: Callable[[Any]] = None,
+           on_disconnected: Callable[[]] = None) -> Generator[Client, None, None]:
+    """Use socket clients in a with statement."""
 
-    c = Client(*args, **kwargs)
-    c.connect(host, port)
+    c = Client(on_receive=on_receive,
+               on_disconnected=on_disconnected)
+    c.connect(host=host, port=port)
     yield c
     c.disconnect()

@@ -3,7 +3,9 @@ import pickle
 import socket
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
+from typing import Any, Union, Generator
 
 import select
 
@@ -15,7 +17,10 @@ from .util import LEN_SIZE, DEFAULT_HOST, DEFAULT_PORT, encode_message_size, dec
 class Server:
     """A socket server."""
 
-    def __init__(self, on_receive=None, on_connect=None, on_disconnect=None):
+    def __init__(self,
+                 on_receive: Callable[[int, Any]] = None,
+                 on_connect: Callable[[int]] = None,
+                 on_disconnect: Callable[[int]] = None) -> None:
         """`on_receive` is a function that will be called when a message is received from a client.
             It takes two parameters: client ID and data received.
         `on_connect` is a function that will be called when a client connects.
@@ -23,18 +28,18 @@ class Server:
         `on_disconnect` is a function that will be called when a client disconnects.
             It takes one parameter: client ID."""
 
-        self._on_receive = on_receive
-        self._on_connect = on_connect
-        self._on_disconnect = on_disconnect
-        self._serving = False
-        self._clients = {}
-        self._keys = {}
+        self._on_receive: Callable[[int, Any]] = on_receive
+        self._on_connect: Callable[[int]] = on_connect
+        self._on_disconnect: Callable[[int]] = on_disconnect
+        self._serving: bool = False
+        self._clients: dict[int, socket.socket] = {}
+        self._keys: dict[int, bytes] = {}
         self._next_client_id = 0
-        self._serveThread = None
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._serve_thread: Union[threading.Thread, None] = None
+        self._sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    def start(self, host=None, port=None):
+    def start(self, host: str = None, port: int = None) -> None:
         """Start the server."""
 
         if self._serving:
@@ -49,11 +54,11 @@ class Server:
         self._sock.listen()
         self._serving = True
 
-        self._serveThread = threading.Thread(target=self._serve)
-        self._serveThread.daemon = True
-        self._serveThread.start()
+        self._serve_thread = threading.Thread(target=self._serve)
+        self._serve_thread.daemon = True
+        self._serve_thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the server."""
 
         if not self._serving:
@@ -78,12 +83,12 @@ class Server:
         self._clients = {}
         self._keys = {}
 
-        if self._serveThread is not None:
-            if self._serveThread is not threading.current_thread():
-                self._serveThread.join()
-            self._serveThread = None
+        if self._serve_thread is not None:
+            if self._serve_thread is not threading.current_thread():
+                self._serve_thread.join()
+            self._serve_thread = None
 
-    def send(self, data, *client_ids):
+    def send(self, data: Any, *client_ids: int) -> None:
         """Send data to clients. If no client IDs are specified, data will be sent to all clients."""
 
         if not self._serving:
@@ -101,12 +106,12 @@ class Server:
             else:
                 raise RuntimeError(f"client {client_id} does not exist")
 
-    def serving(self):
+    def serving(self) -> bool:
         """Check whether the server is serving."""
 
         return self._serving
 
-    def get_addr(self):
+    def get_addr(self) -> tuple[str, int]:
         """Get the address of the server."""
 
         if not self._serving:
@@ -114,7 +119,7 @@ class Server:
 
         return self._sock.getsockname()
 
-    def get_client_addr(self, client_id):
+    def get_client_addr(self, client_id: int) -> tuple[str, int]:
         """Get the address of a client."""
 
         if not self._serving:
@@ -122,7 +127,7 @@ class Server:
 
         return self._clients[client_id].getpeername()
 
-    def remove_client(self, client_id):
+    def remove_client(self, client_id: int) -> None:
         """Remove a client."""
 
         if not self._serving:
@@ -133,15 +138,15 @@ class Server:
 
         conn = self._clients[client_id]
         conn.close()
-        self._clients.pop(conn)
-        self._keys.pop(conn)
+        self._clients.pop(client_id)
+        self._keys.pop(client_id)
 
-    def _serve(self):
+    def _serve(self) -> None:
         """Serve clients."""
 
         while self._serving:
             try:
-                socks = list(self._clients.values())
+                socks: list[socket.socket] = list(self._clients.values())
                 socks.insert(0, self._sock)
                 read_socks, _, exception_socks = select.select(socks, [], socks)
             except ValueError:  # happens when a client is removed
@@ -219,7 +224,7 @@ class Server:
 
                 self._call_on_disconnect(client_id)
 
-    def _exchange_keys(self, client_id, conn):
+    def _exchange_keys(self, client_id: int, conn: socket.socket) -> None:
         """Exchange crypto keys with a client."""
 
         public_key, private_key = new_rsa_keys()
@@ -233,14 +238,14 @@ class Server:
         key = rsa_decrypt(private_key, key_encrypted)
         self._keys[client_id] = key
 
-    def _new_client_id(self):
+    def _new_client_id(self) -> int:
         """Generate a new client ID."""
 
         client_id = self._next_client_id
         self._next_client_id += 1
         return client_id
 
-    def _call_on_receive(self, client_id, data):
+    def _call_on_receive(self, client_id: int, data: Any) -> None:
         """Call the receive callback."""
 
         if self._on_receive is not None:
@@ -248,7 +253,7 @@ class Server:
             t.daemon = True
             t.start()
 
-    def _call_on_connect(self, client_id):
+    def _call_on_connect(self, client_id: int) -> None:
         """Call the connect callback."""
 
         if self._on_connect is not None:
@@ -256,7 +261,7 @@ class Server:
             t.daemon = True
             t.start()
 
-    def _call_on_disconnect(self, client_id):
+    def _call_on_disconnect(self, client_id: int) -> None:
         """Call the disconnect callback."""
 
         if self._on_disconnect is not None:
@@ -266,10 +271,16 @@ class Server:
 
 
 @contextmanager
-def server(host, port, *args, **kwargs):
+def server(host: str = None,
+           port: int = None,
+           on_receive: Callable[[int, Any]] = None,
+           on_connect: Callable[[int]] = None,
+           on_disconnect: Callable[[int]] = None) -> Generator[Server, None, None]:
     """Use socket servers in a with statement."""
 
-    s = Server(*args, **kwargs)
-    s.start(host, port)
+    s = Server(on_receive=on_receive,
+               on_connect=on_connect,
+               on_disconnect=on_disconnect)
+    s.start(host=host, port=port)
     yield s
     s.stop()
