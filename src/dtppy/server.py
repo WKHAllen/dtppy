@@ -3,9 +3,8 @@ import pickle
 import socket
 import threading
 import time
-from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Any, Union, Generator
+from typing import Any, Tuple, List, Dict, Union, Generator, Callable
 
 import select
 
@@ -34,8 +33,8 @@ class Server:
         self._on_connect: Callable[[int], None] = on_connect
         self._on_disconnect: Callable[[int], None] = on_disconnect
         self._serving: bool = False
-        self._clients: dict[int, socket.socket] = {}
-        self._keys: dict[int, bytes] = {}
+        self._clients: Dict[int, socket.socket] = {}
+        self._keys: Dict[int, bytes] = {}
         self._next_client_id = 0
         self._serve_thread: Union[threading.Thread, None] = None
         self._sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -76,11 +75,15 @@ class Server:
             pass  # Connection reset by peer
 
         time.sleep(0.01)
+        local_client_sock.shutdown(socket.SHUT_RDWR)
         local_client_sock.close()
 
         for client_id in self._clients:
-            self._clients[client_id].close()
+            client_sock = self._clients[client_id]
+            client_sock.shutdown(socket.SHUT_RDWR)
+            client_sock.close()
 
+        self._sock.shutdown(socket.SHUT_RDWR)
         self._sock.close()
         self._clients = {}
         self._keys = {}
@@ -113,7 +116,7 @@ class Server:
 
         return self._serving
 
-    def get_addr(self) -> tuple[str, int]:
+    def get_addr(self) -> Tuple[str, int]:
         """Get the address of the server."""
 
         if not self._serving:
@@ -121,7 +124,7 @@ class Server:
 
         return self._sock.getsockname()
 
-    def get_client_addr(self, client_id: int) -> tuple[str, int]:
+    def get_client_addr(self, client_id: int) -> Tuple[str, int]:
         """Get the address of a client."""
 
         if not self._serving:
@@ -139,6 +142,7 @@ class Server:
             raise RuntimeError(f"client {client_id} does not exist")
 
         conn = self._clients.pop(client_id)
+        conn.shutdown(socket.SHUT_RDWR)
         conn.close()
         self._keys.pop(client_id)
 
@@ -147,11 +151,11 @@ class Server:
 
         while self._serving:
             try:
-                socks: list[socket.socket] = list(self._clients.values())
+                socks: List[socket.socket] = list(self._clients.values())
                 socks.insert(0, self._sock)
                 select_result = select.select(socks, [], socks)
-                read_socks: list[socket.socket] = select_result[0]
-                exception_socks: list[socket.socket] = select_result[2]
+                read_socks: List[socket.socket] = select_result[0]
+                exception_socks: List[socket.socket] = select_result[2]
             except ValueError:  # happens when a client is removed
                 continue
 
@@ -214,6 +218,7 @@ class Server:
                             else:
                                 raise e
                     else:
+                        notified_sock.shutdown(socket.SHUT_RDWR)
                         notified_sock.close()
 
             for notified_sock in exception_socks:
@@ -231,6 +236,7 @@ class Server:
 
                     self._call_on_disconnect(client_id)
                 else:
+                    notified_sock.shutdown(socket.SHUT_RDWR)
                     notified_sock.close()
 
     def _exchange_keys(self, client_id: int, conn: socket.socket) -> None:

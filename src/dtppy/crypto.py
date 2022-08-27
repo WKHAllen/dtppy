@@ -1,9 +1,11 @@
+from typing import Tuple
+
 import rsa
 from cryptography.fernet import Fernet
 from rsa import PublicKey, PrivateKey
 
 
-def new_rsa_keys(size: int = 512) -> tuple[PublicKey, PrivateKey]:
+def new_rsa_keys(size: int = 512) -> Tuple[PublicKey, PrivateKey]:
     """Generate a new RSA key pair."""
 
     public_key, private_key = rsa.newkeys(size)

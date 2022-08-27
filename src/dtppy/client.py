@@ -3,9 +3,8 @@ import pickle
 import socket
 import threading
 import time
-from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Any, Union, Generator
+from typing import Any, Tuple, Union, Generator, Callable
 
 import select
 
@@ -69,9 +68,12 @@ class Client:
             pass  # Connection reset by peer
 
         time.sleep(0.01)
+        local_client_sock.shutdown(socket.SHUT_RDWR)
         local_client_sock.close()
+        self._local_server.shutdown(socket.SHUT_RDWR)
         self._local_server.close()
 
+        self._sock.shutdown(socket.SHUT_RDWR)
         self._sock.close()
         self._key = None
 
@@ -94,7 +96,7 @@ class Client:
 
         return self._connected
 
-    def get_addr(self) -> tuple[str, int]:
+    def get_addr(self) -> Tuple[str, int]:
         """Get the address of the client."""
 
         if not self._connected:
@@ -102,7 +104,7 @@ class Client:
 
         return self._sock.getsockname()
 
-    def get_server_addr(self) -> tuple[str, int]:
+    def get_server_addr(self) -> Tuple[str, int]:
         """Get the address of the server."""
 
         if not self._connected:

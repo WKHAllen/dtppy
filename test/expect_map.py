@@ -1,14 +1,17 @@
+from typing import Dict
+
+
 class ExpectMap:
-    def __init__(self, expected: dict[str, int]) -> None:
-        self._expected: dict[str, int] = expected
+    def __init__(self, expected: Dict[str, int]) -> None:
+        self._expected: Dict[str, int] = expected
 
     def received(self, name: str) -> None:
         self._expected[name] -= 1
 
-    def get_expected(self) -> dict[str, int]:
+    def get_expected(self) -> Dict[str, int]:
         return self._expected
 
-    def remaining(self) -> dict[str, int]:
+    def remaining(self) -> Dict[str, int]:
         remaining = {}
 
         for name in self._expected:

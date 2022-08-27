@@ -315,8 +315,8 @@ class TestMain(unittest.TestCase):
         })
 
         # Messages
-        large_server_message = random.randbytes(random.randrange(32768, 65536))
-        large_client_message = random.randbytes(random.randrange(16384, 32768))
+        large_server_message = os.urandom(random.randrange(32768, 65536))
+        large_client_message = os.urandom(random.randrange(16384, 32768))
 
         # print(f"Large server message generated ({len(large_server_message)} bytes)")
         # print(f"Large client message generated ({len(large_client_message)} bytes)")
