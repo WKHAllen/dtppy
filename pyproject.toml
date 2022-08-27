@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dtppy"
+version = "0.1.0"
+authors = [
+    { name = "Will Allen", email = "wkhallen@gmail.com" },
+]
+description = "Cross-platform networking interfaces for Python."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Intended Audience :: Developers",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "cryptography==37.0.4",
+    "rsa==4.9"
+]
+
+[project.urls]
+"Homepage" = "https://wkhallen.com/dtp"
+"Repository" = "https://github.com/WKHAllen/dtppy"
