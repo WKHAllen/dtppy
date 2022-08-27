@@ -12,7 +12,7 @@ from src.dtppy.crypto import new_rsa_keys, rsa_encrypt, rsa_decrypt, new_fernet_
 
 from .expect_map import ExpectMap
 
-WAIT_TIME = 0.1
+WAIT_TIME = 0.2
 
 
 class TestUtil(unittest.TestCase):
