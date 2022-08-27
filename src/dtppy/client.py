@@ -18,22 +18,23 @@ class Client:
     """A socket client."""
 
     def __init__(self,
-                 on_receive: Callable[[Any]] = None,
-                 on_disconnected: Callable[[]] = None) -> None:
+                 on_receive: Callable[[Any], None] = None,
+                 on_disconnected: Callable[[], None] = None) -> None:
         """`on_receive` is a function that will be called when a message is received from the server.
-            It takes one parameter: the data received.
-        `on_disconnected` is a function that will be called when the client is unexpected disconnected from the server.
-            It takes no parameters."""
+        It takes one parameter: the data received.
 
-        self._on_receive: Callable[[Any]] = on_receive
-        self._on_disconnected: Callable[[]] = on_disconnected
+        `on_disconnected` is a function that will be called when the client is unexpected disconnected from the server.
+        It takes no parameters."""
+
+        self._on_receive: Callable[[Any], None] = on_receive
+        self._on_disconnected: Callable[[], None] = on_disconnected
         self._connected: bool = False
         self._key: Union[bytes, None] = None
         self._handle_thread: Union[threading.Thread, None] = None
         self._sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._local_server: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    def connect(self, host: str = None, port: str = None) -> None:
+    def connect(self, host: str = None, port: int = None) -> None:
         """Connect to a server."""
 
         if self._connected:
@@ -69,6 +70,7 @@ class Client:
 
         time.sleep(0.01)
         local_client_sock.close()
+        self._local_server.close()
 
         self._sock.close()
         self._key = None
@@ -119,8 +121,8 @@ class Client:
             select.select(socks, [], socks)
 
             if not self._connected:
-                self._local_server.close()
                 return
+
             try:
                 size = self._sock.recv(LEN_SIZE)
 
@@ -186,8 +188,8 @@ class Client:
 @contextmanager
 def client(host: str = None,
            port: int = None,
-           on_receive: Callable[[Any]] = None,
-           on_disconnected: Callable[[]] = None) -> Generator[Client, None, None]:
+           on_receive: Callable[[Any], None] = None,
+           on_disconnected: Callable[[], None] = None) -> Generator[Client, None, None]:
     """Use socket clients in a with statement."""
 
     c = Client(on_receive=on_receive,

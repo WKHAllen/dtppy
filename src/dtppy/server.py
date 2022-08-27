@@ -18,19 +18,21 @@ class Server:
     """A socket server."""
 
     def __init__(self,
-                 on_receive: Callable[[int, Any]] = None,
-                 on_connect: Callable[[int]] = None,
-                 on_disconnect: Callable[[int]] = None) -> None:
+                 on_receive: Callable[[int, Any], None] = None,
+                 on_connect: Callable[[int], None] = None,
+                 on_disconnect: Callable[[int], None] = None) -> None:
         """`on_receive` is a function that will be called when a message is received from a client.
-            It takes two parameters: client ID and data received.
-        `on_connect` is a function that will be called when a client connects.
-            It takes one parameter: client ID.
-        `on_disconnect` is a function that will be called when a client disconnects.
-            It takes one parameter: client ID."""
+        It takes two parameters: client ID and data received.
 
-        self._on_receive: Callable[[int, Any]] = on_receive
-        self._on_connect: Callable[[int]] = on_connect
-        self._on_disconnect: Callable[[int]] = on_disconnect
+        `on_connect` is a function that will be called when a client connects.
+        It takes one parameter: client ID.
+
+        `on_disconnect` is a function that will be called when a client disconnects.
+        It takes one parameter: client ID."""
+
+        self._on_receive: Callable[[int, Any], None] = on_receive
+        self._on_connect: Callable[[int], None] = on_connect
+        self._on_disconnect: Callable[[int], None] = on_disconnect
         self._serving: bool = False
         self._clients: dict[int, socket.socket] = {}
         self._keys: dict[int, bytes] = {}
@@ -136,9 +138,8 @@ class Server:
         if client_id not in self._clients.keys():
             raise RuntimeError(f"client {client_id} does not exist")
 
-        conn = self._clients[client_id]
+        conn = self._clients.pop(client_id)
         conn.close()
-        self._clients.pop(client_id)
         self._keys.pop(client_id)
 
     def _serve(self) -> None:
@@ -148,7 +149,9 @@ class Server:
             try:
                 socks: list[socket.socket] = list(self._clients.values())
                 socks.insert(0, self._sock)
-                read_socks, _, exception_socks = select.select(socks, [], socks)
+                select_result = select.select(socks, [], socks)
+                read_socks: list[socket.socket] = select_result[0]
+                exception_socks: list[socket.socket] = select_result[2]
             except ValueError:  # happens when a client is removed
                 continue
 
@@ -177,38 +180,41 @@ class Server:
                         if self._clients[sock_client_id] == notified_sock:
                             client_id = sock_client_id
 
-                    try:
-                        size = notified_sock.recv(LEN_SIZE)
+                    if client_id is not None:
+                        try:
+                            size = notified_sock.recv(LEN_SIZE)
 
-                        if len(size) == 0:
-                            try:
-                                self.remove_client(client_id)
-                            except ValueError:
-                                pass
+                            if len(size) == 0:
+                                try:
+                                    self.remove_client(client_id)
+                                except ValueError:
+                                    pass
 
-                            self._call_on_disconnect(client_id)
-                            continue
+                                self._call_on_disconnect(client_id)
+                                continue
 
-                        message_size = decode_message_size(size)
-                        message_encoded = notified_sock.recv(message_size)
-                        key = self._keys[client_id]
-                        message = deconstruct_message(message_encoded, key)
+                            message_size = decode_message_size(size)
+                            message_encoded = notified_sock.recv(message_size)
+                            key = self._keys[client_id]
+                            message = deconstruct_message(message_encoded, key)
 
-                        self._call_on_receive(client_id, message)
-                    except OSError as e:
-                        if e.errno == errno.ECONNRESET or e.errno == errno.ENOTSOCK:
-                            if not self._serving:
-                                return
+                            self._call_on_receive(client_id, message)
+                        except OSError as e:
+                            if e.errno == errno.ECONNRESET or e.errno == errno.ENOTSOCK:
+                                if not self._serving:
+                                    return
 
-                            try:
-                                self.remove_client(client_id)
-                            except ValueError:
-                                pass
+                                try:
+                                    self.remove_client(client_id)
+                                except ValueError:
+                                    pass
 
-                            self._call_on_disconnect(client_id)
-                            continue
-                        else:
-                            raise e
+                                self._call_on_disconnect(client_id)
+                                continue
+                            else:
+                                raise e
+                    else:
+                        notified_sock.close()
 
             for notified_sock in exception_socks:
                 client_id = None
@@ -217,12 +223,15 @@ class Server:
                     if self._clients[sock_client_id] == notified_sock:
                         client_id = sock_client_id
 
-                try:
-                    self.remove_client(client_id)
-                except ValueError:
-                    pass
+                if client_id is not None:
+                    try:
+                        self.remove_client(client_id)
+                    except ValueError:
+                        pass
 
-                self._call_on_disconnect(client_id)
+                    self._call_on_disconnect(client_id)
+                else:
+                    notified_sock.close()
 
     def _exchange_keys(self, client_id: int, conn: socket.socket) -> None:
         """Exchange crypto keys with a client."""
@@ -273,9 +282,9 @@ class Server:
 @contextmanager
 def server(host: str = None,
            port: int = None,
-           on_receive: Callable[[int, Any]] = None,
-           on_connect: Callable[[int]] = None,
-           on_disconnect: Callable[[int]] = None) -> Generator[Server, None, None]:
+           on_receive: Callable[[int, Any], None] = None,
+           on_connect: Callable[[int], None] = None,
+           on_disconnect: Callable[[int], None] = None) -> Generator[Server, None, None]:
     """Use socket servers in a with statement."""
 
     s = Server(on_receive=on_receive,
