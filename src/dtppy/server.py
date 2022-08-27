@@ -75,15 +75,12 @@ class Server:
             pass  # Connection reset by peer
 
         time.sleep(0.01)
-        local_client_sock.shutdown(socket.SHUT_RDWR)
         local_client_sock.close()
 
         for client_id in self._clients:
             client_sock = self._clients[client_id]
-            client_sock.shutdown(socket.SHUT_RDWR)
             client_sock.close()
 
-        self._sock.shutdown(socket.SHUT_RDWR)
         self._sock.close()
         self._clients = {}
         self._keys = {}
@@ -218,7 +215,6 @@ class Server:
                             else:
                                 raise e
                     else:
-                        notified_sock.shutdown(socket.SHUT_RDWR)
                         notified_sock.close()
 
             for notified_sock in exception_socks:
@@ -236,7 +232,6 @@ class Server:
 
                     self._call_on_disconnect(client_id)
                 else:
-                    notified_sock.shutdown(socket.SHUT_RDWR)
                     notified_sock.close()
 
     def _exchange_keys(self, client_id: int, conn: socket.socket) -> None:

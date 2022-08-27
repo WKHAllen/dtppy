@@ -68,12 +68,9 @@ class Client:
             pass  # Connection reset by peer
 
         time.sleep(0.01)
-        local_client_sock.shutdown(socket.SHUT_RDWR)
         local_client_sock.close()
-        self._local_server.shutdown(socket.SHUT_RDWR)
         self._local_server.close()
 
-        self._sock.shutdown(socket.SHUT_RDWR)
         self._sock.close()
         self._key = None
 
