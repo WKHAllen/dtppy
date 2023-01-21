@@ -8,7 +8,7 @@ from typing import Any, Tuple, Union, Generator, Callable
 
 import select
 
-from .crypto import new_fernet_key, rsa_encrypt
+from .crypto import new_aes_key, rsa_encrypt
 from .util import LEN_SIZE, DEFAULT_HOST, DEFAULT_PORT, LOCAL_SERVER_HOST, LOCAL_SERVER_PORT, encode_message_size, \
     decode_message_size, construct_message, deconstruct_message
 
@@ -161,7 +161,7 @@ class Client:
         public_key_serialized = self._sock.recv(size)
         public_key = pickle.loads(public_key_serialized)
 
-        key = new_fernet_key()
+        key = new_aes_key()
         key_encrypted = rsa_encrypt(public_key, key)
         size_encoded = encode_message_size(len(key_encrypted))
         self._sock.send(size_encoded + key_encrypted)

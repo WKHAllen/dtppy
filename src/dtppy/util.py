@@ -2,7 +2,7 @@ import pickle
 import socket
 from typing import Any
 
-from .crypto import fernet_encrypt, fernet_decrypt
+from .crypto import aes_encrypt, aes_decrypt
 
 LEN_SIZE: int = 5
 
@@ -41,7 +41,7 @@ def construct_message(data: Any, key: bytes) -> bytes:
     """Construct a message to be sent through a socket."""
 
     message_serialized = pickle.dumps(data)
-    message_encrypted = fernet_encrypt(key, message_serialized)
+    message_encrypted = aes_encrypt(key, message_serialized)
     message_size = encode_message_size(len(message_encrypted))
     return message_size + message_encrypted
 
@@ -49,6 +49,6 @@ def construct_message(data: Any, key: bytes) -> bytes:
 def deconstruct_message(data: bytes, key: bytes) -> Any:
     """Deconstruct a message that came from a socket."""
 
-    message_decrypted = fernet_decrypt(key, data)
+    message_decrypted = aes_decrypt(key, data)
     message_deserialized = pickle.loads(message_decrypted)
     return message_deserialized

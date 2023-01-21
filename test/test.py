@@ -3,16 +3,27 @@ import random
 import sys
 import time
 import unittest
+from typing import List
 
 sys.path.insert(0, os.path.split(os.path.split(os.path.abspath(__file__))[0])[0])
 
 from src.dtppy import Server, Client, server, client
 from src.dtppy.util import encode_message_size, decode_message_size
-from src.dtppy.crypto import new_rsa_keys, rsa_encrypt, rsa_decrypt, new_fernet_key, fernet_encrypt, fernet_decrypt
+from src.dtppy.crypto import new_rsa_keys, rsa_encrypt, rsa_decrypt, new_aes_key, aes_encrypt, aes_decrypt
 
-from .expect_map import ExpectMap
+from expect_map import ExpectMap
 
 WAIT_TIME = 0.2
+
+
+class Custom:
+    def __init__(self, a: int, b: str, c: List[str]):
+        self.a = a
+        self.b = b
+        self.c = c
+
+    def __eq__(self, other):
+        return self.a == other.a and self.b == other.b and self.c == other.c
 
 
 class TestUtil(unittest.TestCase):
@@ -49,16 +60,28 @@ class TestCrypto(unittest.TestCase):
         decrypted_message = decrypted.decode("utf-8")
 
         self.assertEqual(decrypted_message, message)
+        self.assertNotEqual(encrypted, message.encode("utf-8"))
 
-    def test_fernet(self):
-        message = "Hello, Fernet!"
+    def test_aes(self):
+        message = "Hello, AES!"
 
-        key = new_fernet_key()
-        encrypted = fernet_encrypt(key, message.encode("utf-8"))
-        decrypted = fernet_decrypt(key, encrypted)
+        key = new_aes_key()
+        encrypted = aes_encrypt(key, message.encode("utf-8"))
+        decrypted = aes_decrypt(key, encrypted)
         decrypted_message = decrypted.decode("utf-8")
 
         self.assertEqual(decrypted_message, message)
+        self.assertNotEqual(encrypted, message.encode("utf-8"))
+
+    def test_encrypting_aes_key_with_rsa(self):
+        public_key, private_key = new_rsa_keys()
+        key = new_aes_key()
+
+        encrypted_key = rsa_encrypt(public_key, key)
+        decrypted_key = rsa_decrypt(private_key, encrypted_key)
+
+        self.assertEqual(decrypted_key, key)
+        self.assertNotEqual(encrypted_key, key)
 
 
 class TestMain(unittest.TestCase):
@@ -434,6 +457,69 @@ class TestMain(unittest.TestCase):
         # Check messages match
         self.assertEqual(server_messages, received_server_messages)
         self.assertEqual(client_messages, received_client_messages)
+
+        # Disconnect client
+        c.disconnect()
+        time.sleep(WAIT_TIME)
+
+        # Stop server
+        s.stop()
+        time.sleep(WAIT_TIME)
+
+        # Check expect map
+        self.assertEqual(expected.remaining(), {})
+        self.assertTrue(expected.done())
+
+    def test_sending_custom_types(self):
+        # Create expect map
+        expected = ExpectMap({
+            "server receive": 1,
+            "server connect": 1,
+            "server disconnect": 1,
+            "client receive": 1,
+            "client disconnected": 0
+        })
+
+        # Messages
+        server_message = Custom(123, "Hello, custom server class!", ["first server item", "second server item"])
+        client_message = Custom(456, "Hello, custom client class!",
+                                ["#1 client item", "client item #2", "(3) client item"])
+
+        def server_on_receive(client_id, data):
+            expected.received("server receive")
+            self.assertEqual(client_id, 0)
+            self.assertEqual(data, server_message)
+
+        def server_on_connect(client_id):
+            expected.received("server connect")
+            self.assertEqual(client_id, 0)
+
+        def server_on_disconnect(client_id):
+            expected.received("server disconnect")
+            self.assertEqual(client_id, 0)
+
+        def client_on_receive(data):
+            expected.received("client receive")
+            self.assertEqual(data, client_message)
+
+        def client_on_disconnected():
+            expected.received("client disconnected")
+
+        # Create server
+        s = Server(on_receive=server_on_receive, on_connect=server_on_connect, on_disconnect=server_on_disconnect)
+        s.start()
+        server_host, server_port = s.get_addr()
+        time.sleep(WAIT_TIME)
+
+        # Create client
+        c = Client(on_receive=client_on_receive, on_disconnected=client_on_disconnected)
+        c.connect(host=server_host, port=server_port)
+        time.sleep(WAIT_TIME)
+
+        # Send messages
+        c.send(server_message)
+        s.send(client_message)
+        time.sleep(WAIT_TIME)
 
         # Disconnect client
         c.disconnect()
