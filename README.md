@@ -68,6 +68,7 @@ def disconnected():
 
 # Create a client that sends a message to the server and receives the length of the message
 c = Client(on_receive=receive, on_disconnected=disconnected)
+c.connect("127.0.0.1", 29275)
 # Send the message to the server
 c.send(message)
 ```
